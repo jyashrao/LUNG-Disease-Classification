@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lung Disease Detection</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f0f2f5;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+        .container {
+            background: white;
+            padding: 40px;
+            border-radius: 15px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+            text-align: center;
+            width: 400px;
+        }
+        h1 { color: #333; margin-bottom: 20px; }
+        .upload-area {
+            border: 2px dashed #4a90e2;
+            padding: 40px;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: background 0.3s;
+            margin-bottom: 20px;
+        }
+        .upload-area:hover, .upload-area.dragover {
+            background-color: #eef6ff;
+        }
+        .upload-area p {
+            margin: 0;
+            color: #666;
+            font-weight: 500;
+        }
+        #fileInput { display: none; }
+        
+        /* Result Styling */
+        #result {
+            display: none;
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 8px;
+        }
+        .success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        
+        .loader {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #3498db;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+            display: none;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>Lung Disease Classification ~ Yash</h1>
+    
+    <div class="upload-area" id="dropZone">
+        <p>📂 Drag & Drop WAV file here<br>or click to upload</p>
+        <input type="file" id="fileInput" accept=".wav">
+    </div>
+
+    <div class="loader" id="loader"></div>
+
+    <div id="result"></div>
+</div>
+
+<script>
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+    const resultDiv = document.getElementById('result');
+    const loader = document.getElementById('loader');
+
+    // Handle Click
+    dropZone.addEventListener('click', () => fileInput.click());
+
+    // Handle Drag & Drop Visuals
+    dropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropZone.classList.add('dragover');
+    });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+    
+    // Handle File Drop
+    dropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropZone.classList.remove('dragover');
+        const files = e.dataTransfer.files;
+        if (files.length) uploadFile(files[0]);
+    });
+
+    // Handle File Selection via Click
+    fileInput.addEventListener('change', () => {
+        if (fileInput.files.length) uploadFile(fileInput.files[0]);
+    });
+
+    function uploadFile(file) {
+        if (file.type !== 'audio/wav' && !file.name.endsWith('.wav')) {
+            showResult('Please upload a valid .wav file', 'error');
+            return;
+        }
+
+        // Reset UI
+        resultDiv.style.display = 'none';
+        loader.style.display = 'block';
+
+        const formData = new FormData();
+        formData.append('file', file);
+
+        fetch('/predict', {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.json())
+        .then(data => {
+            loader.style.display = 'none';
+            if (data.error) {
+                showResult(data.error, 'error');
+            } else {
+                showResult(`Diagnosis: <strong>${data.class}</strong><br>Confidence: ${data.confidence}`, 'success');
+            }
+        })
+        .catch(err => {
+            loader.style.display = 'none';
+            showResult('Error connecting to server', 'error');
+        });
+    }
+
+    function showResult(html, type) {
+        resultDiv.innerHTML = html;
+        resultDiv.className = type; // applies 'success' or 'error' class
+        resultDiv.style.display = 'block';
+    }
+</script>
+
+</body>
+</html>
