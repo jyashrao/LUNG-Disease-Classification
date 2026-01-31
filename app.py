@@ -29,8 +29,8 @@ MAX_FRAMES = 100
 
 def extract_features(filepath):
     try:
-        # Load audio with lower sample rate to save RAM
-        y, sr = librosa.load(filepath, sr=22050, duration=10) # Limit to 10s to save memory
+        # MEMORY OPTIMIZATION: Limit duration to 10 seconds to save RAM on Free Tier
+        y, sr = librosa.load(filepath, sr=22050, duration=10) 
         
         # Feature extraction
         spectrogram = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=NUM_FEATURES)
@@ -48,7 +48,7 @@ def extract_features(filepath):
         print(f"Error parsing audio: {e}")
         return None
     finally:
-        # Force garbage collection to free memory on Render Free Tier
+        # Force garbage collection to free memory immediately
         gc.collect()
 
 # --- ROUTES ---
@@ -58,6 +58,7 @@ def home():
 
 @app.route('/predict', methods=['POST'])
 def predict():
+    # Check if model is loaded
     if not model:
         return jsonify({'error': 'Model not loaded. Check server logs.'}), 500
 
@@ -84,7 +85,7 @@ def predict():
             # 3. Predict
             prediction = model.predict(features)
             
-            # --- DEBUG LOGGING ---
+            # --- DEBUG LOGGING (Check Render Logs!) ---
             print("\n--- MODEL DIAGNOSIS ---")
             scores = {}
             for i, score in enumerate(prediction[0]):
@@ -100,17 +101,17 @@ def predict():
 
             return jsonify({
                 'class': predicted_class,
-                'confidence': f"{confidence * 100:.2f}%",
-                'all_scores': scores # Optional: Send full data to frontend if needed
+                'confidence': f"{confidence * 100:.2f}%"
             })
 
         except Exception as e:
             print(f"Prediction Error: {e}")
             return jsonify({'error': f"Server Error: {str(e)}"}), 500
         finally:
+            # Clean up file and memory
             if os.path.exists(filepath):
                 os.remove(filepath)
-            gc.collect() # Clean memory again
+            gc.collect()
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
