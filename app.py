@@ -1,4 +1,5 @@
 import os
+import gc
 import numpy as np
 import librosa
 import tensorflow as tf
@@ -13,26 +14,29 @@ os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 # Load the trained model
 MODEL_PATH = "respiratory_model.h5"
 try:
+    # Load model efficiently
     model = tf.keras.models.load_model(MODEL_PATH)
     print("Model loaded successfully.")
 except Exception as e:
-    print(f"Error loading model: {e}")
-    print("Please ensure 'respiratory_model.h5' is in the same directory.")
+    print(f"CRITICAL ERROR: Could not load model. {e}")
+    model = None
 
-# Constants (Must match your training config)
+# --- CONSTANTS (Must match training) ---
+# Ensure this list is in the EXACT order of your training class_indices
 CLASSES = ["COPD", "Asthma", "Pneumonia", "URTI", "Healthy", "Bronchiectasis", "LRTI", "Bronchiolitis"]
 NUM_FEATURES = 52
 MAX_FRAMES = 100
 
-# --- PREPROCESSING FUNCTIONS ---
-# These are copied from your script to ensure the input data matches the training data
-def extract_log_spectrogram(filepath):
+def extract_features(filepath):
     try:
-        signal, sr = librosa.load(filepath, sr=22050)
-        spectrogram = librosa.feature.melspectrogram(y=signal, sr=sr, n_mels=NUM_FEATURES)
+        # Load audio with lower sample rate to save RAM
+        y, sr = librosa.load(filepath, sr=22050, duration=10) # Limit to 10s to save memory
+        
+        # Feature extraction
+        spectrogram = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=NUM_FEATURES)
         log_spectrogram = librosa.power_to_db(spectrogram).T
         
-        # Padding/Truncating
+        # Pad/Truncate
         if log_spectrogram.shape[0] > MAX_FRAMES:
             log_spectrogram = log_spectrogram[:MAX_FRAMES]
         else:
@@ -41,51 +45,72 @@ def extract_log_spectrogram(filepath):
             
         return log_spectrogram
     except Exception as e:
-        print(f"Error processing audio: {e}")
+        print(f"Error parsing audio: {e}")
         return None
+    finally:
+        # Force garbage collection to free memory on Render Free Tier
+        gc.collect()
 
 # --- ROUTES ---
-
 @app.route('/')
 def home():
     return render_template('index.html')
 
 @app.route('/predict', methods=['POST'])
 def predict():
+    if not model:
+        return jsonify({'error': 'Model not loaded. Check server logs.'}), 500
+
     if 'file' not in request.files:
-        return jsonify({'error': 'No file uploaded'})
+        return jsonify({'error': 'No file uploaded'}), 400
     
     file = request.files['file']
     if file.filename == '':
-        return jsonify({'error': 'No file selected'})
+        return jsonify({'error': 'No file selected'}), 400
 
     if file:
-        filename = secure_filename(file.filename)
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], secure_filename(file.filename))
         file.save(filepath)
 
-        # Preprocess
-        features = extract_log_spectrogram(filepath)
-        
-        if features is None:
-             return jsonify({'error': 'Error processing audio file'})
+        try:
+            # 1. Preprocess
+            features = extract_features(filepath)
+            if features is None:
+                return jsonify({'error': 'Could not process audio file'}), 500
 
-        # Prepare for model (Add batch dimension: (1, 100, 52))
-        features = np.expand_dims(features, axis=0)
+            # 2. Reshape for model (1, 100, 52)
+            features = np.expand_dims(features, axis=0)
 
-        # Predict
-        prediction = model.predict(features)
-        predicted_index = np.argmax(prediction)
-        predicted_class = CLASSES[predicted_index]
-        confidence = float(prediction[0][predicted_index])
+            # 3. Predict
+            prediction = model.predict(features)
+            
+            # --- DEBUG LOGGING ---
+            print("\n--- MODEL DIAGNOSIS ---")
+            scores = {}
+            for i, score in enumerate(prediction[0]):
+                percent = score * 100
+                scores[CLASSES[i]] = f"{percent:.2f}%"
+                print(f"{CLASSES[i]}: {percent:.2f}%")
+            print("-----------------------")
+            
+            # 4. Get Result
+            predicted_index = np.argmax(prediction)
+            predicted_class = CLASSES[predicted_index]
+            confidence = float(prediction[0][predicted_index])
 
-        # Clean up uploaded file
-        os.remove(filepath)
+            return jsonify({
+                'class': predicted_class,
+                'confidence': f"{confidence * 100:.2f}%",
+                'all_scores': scores # Optional: Send full data to frontend if needed
+            })
 
-        return jsonify({
-            'class': predicted_class,
-            'confidence': f"{confidence * 100:.2f}%"
-        })
+        except Exception as e:
+            print(f"Prediction Error: {e}")
+            return jsonify({'error': f"Server Error: {str(e)}"}), 500
+        finally:
+            if os.path.exists(filepath):
+                os.remove(filepath)
+            gc.collect() # Clean memory again
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    app.run(host='0.0.0.0', port=5000)
